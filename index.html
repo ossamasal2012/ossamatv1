@@ -965,96 +965,165 @@ function playChannel(url, name){
   buildSidebar();
 }
 
-// CORS proxies — tried in order until one works
-const CORS_PROXIES = [
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  url => `https://cors-anywhere.herokuapp.com/${url}`,
-];
-let currentProxyIdx = -1; // -1 = direct (no proxy)
+// ═══════════════════════════════════════════════════════════════
+// HLS LOADER — works locally AND when hosted (GitHub Pages, etc.)
+// Proxies EVERY request (manifest + segments) through corsproxy.io
+// ═══════════════════════════════════════════════════════════════
 
-function buildUrl(url, proxyIdx){
-  if(proxyIdx < 0) return url;
-  if(proxyIdx >= CORS_PROXIES.length) return null;
-  return CORS_PROXIES[proxyIdx](url);
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+// Wrap any URL through the proxy
+function px(u){
+  if(!u) return u;
+  if(u.startsWith(CORS_PROXY)) return u; // already proxied
+  return CORS_PROXY + encodeURIComponent(u);
 }
 
-function startHlsWithUrl(rawUrl, proxyIdx){
-  const finalUrl = buildUrl(rawUrl, proxyIdx);
-  if(!finalUrl){ showLoading(false); showError('تعذر تشغيل القناة — تحقق من الرابط أو اتصالك بالإنترنت'); return; }
+// Are we on a real web server? (not file://)
+function isHosted(){
+  return location.protocol === 'https:' || location.protocol === 'http:';
+}
 
-  if(hlsInst){ try{hlsInst.stopLoad();}catch(e){} try{hlsInst.detachMedia();}catch(e){} try{hlsInst.destroy();}catch(e){} hlsInst=null; }
+function afterPlay(){
+  showLoading(false);
+  video.muted = false;
+  video.volume = parseFloat(document.getElementById('volSlider').value) || 1;
+  document.getElementById('muteBtn').textContent = '🔊';
+  document.getElementById('ppBtn').textContent = '⏸';
+  showOvControls();
+}
+
+function killHls(){
+  if(hlsInst){
+    try{hlsInst.stopLoad();}catch(e){}
+    try{hlsInst.detachMedia();}catch(e){}
+    try{hlsInst.destroy();}catch(e){}
+    hlsInst = null;
+  }
+}
+
+function resetVideo(){
   video.pause();
-  video.muted=true;
+  video.muted = true;
   try{video.srcObject=null;}catch(e){}
   video.removeAttribute('src');
   video.load();
+}
 
+// Build HLS.js config — when useProxy=true every XHR is rerouted
+function makeHlsCfg(useProxy){
   const cfg = {
     enableWorker: true,
     lowLatencyMode: true,
-    backBufferLength: 90,
+    backBufferLength: 60,
     startLevel: -1,
-    xhrSetup: function(xhr){ xhr.withCredentials=false; }
+    fragLoadingMaxRetry: 4,
+    manifestLoadingMaxRetry: 4,
   };
+  if(useProxy){
+    // xhrSetup intercepts EVERY request HLS.js makes (manifest + segments)
+    cfg.xhrSetup = function(xhr, url){
+      const proxied = px(url);
+      // re-open with proxied URL (must be called before send)
+      xhr.open('GET', proxied, true);
+    };
+  } else {
+    cfg.xhrSetup = function(xhr){ xhr.withCredentials = false; };
+  }
+  return cfg;
+}
 
-  hlsInst = new Hls(cfg);
-  hlsInst.loadSource(finalUrl);
+function startHls(rawUrl, useProxy, fallbackDone){
+  killHls();
+  resetVideo();
+
+  // The manifest URL itself also needs proxying
+  const manifestUrl = useProxy ? px(rawUrl) : rawUrl;
+
+  hlsInst = new Hls(makeHlsCfg(useProxy));
+  hlsInst.loadSource(manifestUrl);
   hlsInst.attachMedia(video);
 
   hlsInst.on(Hls.Events.MANIFEST_PARSED, ()=>{
-    showLoading(false);
-    currentProxyIdx = proxyIdx; // remember what worked
-    video.muted=true;
-    video.play().then(()=>{
-      video.muted=false;
-      video.volume=parseFloat(document.getElementById('volSlider').value)||1;
-      document.getElementById('muteBtn').textContent='🔊';
-    }).catch(()=>{ document.getElementById('ppBtn').textContent='▶'; });
-    document.getElementById('ppBtn').textContent='⏸';
-    showOvControls();
+    video.muted = true;
+    video.play()
+      .then(()=>{ afterPlay(); })
+      .catch(()=>{
+        // Autoplay blocked — just show play button, stream is loaded
+        showLoading(false);
+        document.getElementById('ppBtn').textContent = '▶';
+        showOvControls();
+      });
   });
 
   hlsInst.on(Hls.Events.ERROR, (ev, data)=>{
-    if(data.fatal){
-      // Try next proxy
-      const next = proxyIdx + 1;
-      if(next < CORS_PROXIES.length){
-        console.log('HLS failed, trying proxy #'+next);
-        startHlsWithUrl(rawUrl, next);
-      } else {
-        showLoading(false);
-        showError('تعذر تشغيل القناة — قد يكون الرابط منتهياً أو محجوباً');
-      }
+    if(!data.fatal) return;
+    if(!fallbackDone && isHosted() && !useProxy){
+      // Was running without proxy → retry WITH proxy
+      console.log('[OSSAMA] Direct failed → retrying via CORS proxy');
+      startHls(rawUrl, true, true);
+    } else if(!fallbackDone && isHosted() && useProxy){
+      // Proxy also failed → try second proxy
+      console.log('[OSSAMA] corsproxy failed → trying allorigins');
+      startHlsAlt(rawUrl);
+    } else {
+      showLoading(false);
+      showError('تعذر تشغيل القناة — تأكد من صحة الرابط أو جرب رابطاً آخر');
     }
+  });
+}
+
+// Alternative proxy fallback
+function startHlsAlt(rawUrl){
+  killHls();
+  resetVideo();
+  const altProxy = 'https://api.allorigins.win/raw?url=';
+  const manifestUrl = altProxy + encodeURIComponent(rawUrl);
+
+  hlsInst = new Hls({
+    enableWorker: true,
+    startLevel: -1,
+    xhrSetup: function(xhr, url){
+      const final = url.startsWith('http') && !url.startsWith(altProxy)
+        ? altProxy + encodeURIComponent(url)
+        : url;
+      xhr.open('GET', final, true);
+    }
+  });
+  hlsInst.loadSource(manifestUrl);
+  hlsInst.attachMedia(video);
+  hlsInst.on(Hls.Events.MANIFEST_PARSED, ()=>{
+    video.muted = true;
+    video.play().then(()=>{ afterPlay(); }).catch(()=>{ showLoading(false); document.getElementById('ppBtn').textContent='▶'; showOvControls(); });
+  });
+  hlsInst.on(Hls.Events.ERROR, (ev, data)=>{
+    if(data.fatal){ showLoading(false); showError('تعذر تشغيل القناة — تأكد من صحة الرابط أو جرب رابطاً آخر'); }
   });
 }
 
 function loadHLS(url){
   showLoading(true, url);
-  currentProxyIdx = -1;
 
   if(Hls.isSupported()){
-    // Start with direct URL first, fallback to proxies on error
-    startHlsWithUrl(url, -1);
+    if(isHosted()){
+      // On hosted URL: go straight to proxy — avoids wasting time on CORS failure
+      startHls(url, true, false);
+    } else {
+      // Local file:// — try direct, no proxy needed
+      startHls(url, false, false);
+    }
   } else if(video.canPlayType('application/vnd.apple.mpegurl')){
     // Safari native HLS
-    if(hlsInst){ try{hlsInst.destroy();}catch(e){} hlsInst=null; }
-    video.src = url;
-    video.muted = true;
+    killHls();
+    resetVideo();
+    video.src = isHosted() ? px(url) : url;
     video.addEventListener('loadedmetadata',()=>{
-      showLoading(false);
-      video.play().then(()=>{
-        video.muted=false;
-        video.volume=parseFloat(document.getElementById('volSlider').value)||1;
-        document.getElementById('muteBtn').textContent='🔊';
-      }).catch(()=>{});
-      document.getElementById('ppBtn').textContent='⏸';
-      showOvControls();
+      video.play().then(()=>{ afterPlay(); }).catch(()=>{ showLoading(false); document.getElementById('ppBtn').textContent='▶'; });
     },{once:true});
     video.addEventListener('error',()=>{ showLoading(false); showError('تعذر التحميل على هذا المتصفح'); },{once:true});
   } else {
-    showLoading(false); showError('المتصفح لا يدعم HLS. جرب Chrome أو Firefox.');
+    showLoading(false);
+    showError('المتصفح لا يدعم HLS — جرب Chrome أو Firefox');
   }
 }
 
