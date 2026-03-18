@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>OSSAMA Player</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
+<!-- HLS.js for M3U8 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+<style>
+  :root {
+    --gold: #c9a84c;
+    --gold-light: #f0d060;
+    --gold-dark: #8b6914;
+    --black: #050505;
+    --black2: #0d0d0d;
+    --black3: #161616;
+    --black4: #1e1e1e;
+    --black5: #2a2a2a;
+    --text: #e8e0cc;
+    --text-dim: #9a8a6a;
+    --red-live: #e74c3c;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    width:100%; height:100%;
+    font-family:'Cairo',sans-serif;
+    background: var(--black);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  /* === LAYOUT === */
+  .app {
+    display:flex; flex-direction:column;
+    height:100vh; width:100vw;
+    background: var(--black);
+  }
+
+  /* === TOP BAR === */
+  .topbar {
+    display:flex; align-items:center; gap:12px;
+    padding: 0 20px;
+    height: 60px; min-height:60px;
+    background: linear-gradient(90deg, #050505 0%, #0f0f05 50%, #050505 100%);
+    border-bottom: 1px solid rgba(201,168,76,0.2);
+    z-index:10;
+  }
+  .logo-small {
+    font-family:'Cinzel',serif;
+    font-size:18px; font-weight:900;
+    background: linear-gradient(135deg, #f0d060, #c9a84c, #8b6914);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    background-clip:text; letter-spacing:2px; white-space:nowrap;
+    filter: drop-shadow(0 0 6px rgba(201,168,76,0.4));
+  }
+  .channel-info { flex:1; overflow:hidden; }
+  .channel-info-name {
+    font-size:15px; font-weight:700; color: var(--gold-light);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .channel-info-sub { font-size:11px; color: var(--text-dim); display:flex; align-items:center; gap:6px; }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+  .live-badge {
+    background: var(--red-live); color:white; font-size:9px; font-weight:900;
+    padding:2px 7px; border-radius:20px; letter-spacing:1px;
+    display:flex; align-items:center; gap:4px;
+  }
+  .live-badge::before { content:''; width:6px;height:6px;border-radius:50%;background:white;animation:pulse 1s infinite; }
+
+  .back-btn {
+    background: var(--black4); border: 1px solid rgba(201,168,76,0.3);
+    color: var(--gold); padding:7px 14px; border-radius:8px;
+    cursor:pointer; font-family:'Cairo',sans-serif; font-size:13px; font-weight:600;
+    transition:all 0.2s; white-space:nowrap;
+  }
+  .back-btn:hover { border-color:var(--gold); background:rgba(201,168,76,0.1); }
+
+  /* === PLAYER AREA === */
+  .player-section {
+    flex:1; display:flex; overflow:hidden; position:relative;
+    min-height:0;
+  }
+
+  /* VIDEO CONTAINER */
+  .video-wrap {
+    flex:1; position:relative; background:#000;
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+  #mainVideo {
+    width:100%; height:100%;
+    object-fit:contain;
+    background:#000;
+  }
+
+  /* OVERLAY CONTROLS */
+  .video-overlay {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    pointer-events:none;
+    opacity:0; transition:opacity 0.3s;
+    z-index:5;
+  }
+  .video-wrap:hover .video-overlay,
+  .video-overlay.show { opacity:1; pointer-events:all; }
+
+  .overlay-top {
+    background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+    padding:14px 20px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .overlay-title { font-size:15px; font-weight:700; color:var(--gold-light); }
+  .overlay-bottom {
+    margin-top:auto;
+    background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+    padding:12px 20px 16px;
+  }
+
+  /* PROGRESS BAR */
+  .progress-bar {
+    width:100%; height:4px; background:rgba(255,255,255,0.2);
+    border-radius:2px; margin-bottom:12px; cursor:pointer; position:relative;
+  }
+  .progress-fill {
+    height:100%; background: linear-gradient(90deg, var(--gold-dark), var(--gold));
+    border-radius:2px; width:0%;
+    transition:width 0.5s;
+  }
+  .progress-dot {
+    position:absolute; top:-4px; right:0%;
+    width:12px; height:12px; border-radius:50%;
+    background:var(--gold); transform:translateX(50%);
+    box-shadow:0 0 8px rgba(201,168,76,0.8);
+  }
+
+  /* CONTROLS ROW */
+  .controls-row {
+    display:flex; align-items:center; gap:14px;
+  }
+  .ctrl-btn {
+    background:none; border:none; cursor:pointer;
+    color:white; font-size:20px;
+    width:38px; height:38px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    transition:all 0.2s;
+  }
+  .ctrl-btn:hover { background:rgba(255,255,255,0.15); }
+  .ctrl-btn.primary {
+    width:48px; height:48px; font-size:24px;
+    background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color: var(--black); box-shadow: 0 0 15px rgba(201,168,76,0.4);
+  }
+  .ctrl-btn.primary:hover { transform:scale(1.1); box-shadow:0 0 25px rgba(201,168,76,0.6); }
+
+  .volume-wrap { display:flex; align-items:center; gap:8px; }
+  .volume-slider {
+    -webkit-appearance:none; appearance:none;
+    width:80px; height:4px; background:rgba(255,255,255,0.3);
+    border-radius:2px; outline:none; cursor:pointer;
+  }
+  .volume-slider::-webkit-slider-thumb {
+    -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+    background:var(--gold); cursor:pointer;
+  }
+  .time-display { font-size:12px; color:rgba(255,255,255,0.7); margin-right:auto; }
+  .fullscreen-btn { margin-right:0; margin-left:auto; }
+
+  /* LOADING OVERLAY */
+  .loading-overlay {
+    position:absolute; inset:0;
+    background:rgba(0,0,0,0.7);
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px;
+    z-index:10;
+  }
+  .spinner {
+    width:56px; height:56px; border-radius:50%;
+    border:3px solid rgba(201,168,76,0.2);
+    border-top-color: var(--gold);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .loading-text { color: var(--gold); font-size:14px; font-weight:600; }
+  .loading-sub { color: var(--text-dim); font-size:12px; }
+
+  /* ERROR STATE */
+  .error-overlay {
+    position:absolute; inset:0;
+    background: var(--black2);
+    display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:16px;
+    z-index:10; padding:20px; text-align:center;
+  }
+  .error-overlay.show { display:flex; }
+  .error-icon { font-size:50px; }
+  .error-title { font-size:18px; font-weight:700; color:var(--gold); }
+  .error-msg { color:var(--text-dim); font-size:13px; max-width:300px; }
+  .retry-btn {
+    background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color: var(--black); border:none; border-radius:10px;
+    padding:10px 24px; cursor:pointer;
+    font-family:'Cairo',sans-serif; font-weight:700; font-size:14px;
+    transition:all 0.2s; margin-top:8px;
+  }
+  .retry-btn:hover { transform:translateY(-2px); box-shadow:0 4px 20px rgba(201,168,76,0.4); }
+
+  /* SIDEBAR */
+  .sidebar {
+    width:320px; min-width:320px;
+    background: linear-gradient(180deg, var(--black2), var(--black3));
+    border-right: 1px solid rgba(201,168,76,0.15);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .sidebar-header {
+    padding:16px 18px 12px;
+    border-bottom:1px solid rgba(201,168,76,0.12);
+    display:flex; align-items:center; gap:10px;
+  }
+  .sidebar-title { font-size:14px; font-weight:700; color:var(--gold); }
+  .sidebar-count {
+    background:rgba(201,168,76,0.15); color:var(--gold);
+    font-size:11px; padding:2px 8px; border-radius:20px; font-weight:700;
+  }
+  .sidebar-search {
+    padding:10px 14px;
+    border-bottom:1px solid rgba(201,168,76,0.1);
+  }
+  .sidebar-search input {
+    width:100%; background:var(--black4);
+    border:1px solid rgba(201,168,76,0.2);
+    border-radius:8px; padding:8px 12px;
+    color:var(--text); font-family:'Cairo',sans-serif; font-size:13px;
+    outline:none; transition:border-color 0.2s;
+  }
+  .sidebar-search input:focus { border-color:var(--gold); }
+  .sidebar-search input::placeholder { color:var(--text-dim); }
+  .sidebar-list {
+    flex:1; overflow-y:auto; padding:8px 0;
+    scrollbar-width:thin; scrollbar-color:var(--gold-dark) var(--black3);
+  }
+  .sidebar-list::-webkit-scrollbar { width:4px; }
+  .sidebar-list::-webkit-scrollbar-track { background:var(--black3); }
+  .sidebar-list::-webkit-scrollbar-thumb { background:var(--gold-dark); border-radius:2px; }
+
+  .sidebar-item {
+    display:flex; align-items:center; gap:12px;
+    padding:10px 14px; cursor:pointer;
+    transition:background 0.2s;
+    border-bottom:1px solid rgba(255,255,255,0.03);
+  }
+  .sidebar-item:hover { background:rgba(201,168,76,0.07); }
+  .sidebar-item.active {
+    background:rgba(201,168,76,0.12);
+    border-left:3px solid var(--gold);
+  }
+  .sidebar-item-img {
+    width:44px; height:44px; border-radius:8px;
+    background:var(--black5);
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; flex-shrink:0; overflow:hidden;
+  }
+  .sidebar-item-img img { width:100%; height:100%; object-fit:contain; padding:4px; }
+  .sidebar-item-name { font-size:13px; font-weight:600; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sidebar-item-badge {
+    font-size:9px; font-weight:900; padding:2px 6px; border-radius:20px;
+    background:rgba(201,168,76,0.2); color:var(--gold);
+    flex-shrink:0;
+  }
+  .sidebar-item-badge.url { background:rgba(41,128,185,0.2); color:#5dade2; }
+
+  /* URL PLAYER */
+  .url-frame-wrap {
+    flex:1; display:none; align-items:center; justify-content:center;
+    background:var(--black2); flex-direction:column; gap:20px; padding:20px;
+  }
+  .url-frame-wrap.show { display:flex; }
+  .url-open-btn {
+    background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color:var(--black); border:none; border-radius:14px;
+    padding:14px 32px; cursor:pointer;
+    font-family:'Cairo',sans-serif; font-weight:700; font-size:16px;
+    transition:all 0.2s; text-decoration:none; display:inline-block;
+    box-shadow:0 4px 20px rgba(201,168,76,0.3);
+  }
+  .url-open-btn:hover { transform:translateY(-3px); box-shadow:0 8px 30px rgba(201,168,76,0.5); }
+  .url-info { text-align:center; }
+  .url-info h3 { color:var(--gold); font-size:18px; margin-bottom:8px; }
+  .url-info p { color:var(--text-dim); font-size:13px; max-width:300px; }
+
+  /* URL INPUT PANEL */
+  .url-input-panel {
+    padding:14px 18px;
+    border-top:1px solid rgba(201,168,76,0.12);
+    background:var(--black2);
+  }
+  .url-input-row { display:flex; gap:8px; }
+  .url-input-field {
+    flex:1; background:var(--black4);
+    border:1px solid rgba(201,168,76,0.2);
+    border-radius:10px; padding:10px 14px;
+    color:var(--text); font-family:'Cairo',sans-serif; font-size:13px;
+    outline:none; transition:border-color 0.2s; text-align:left; direction:ltr;
+  }
+  .url-input-field:focus { border-color:var(--gold); }
+  .url-input-field::placeholder { color:var(--text-dim); direction:rtl; text-align:right; }
+  .url-play-btn {
+    background: linear-gradient(135deg, var(--gold-dark), var(--gold));
+    color:var(--black); border:none; border-radius:10px;
+    padding:10px 16px; cursor:pointer;
+    font-family:'Cairo',sans-serif; font-weight:700; font-size:13px;
+    transition:all 0.2s; white-space:nowrap;
+  }
+  .url-play-btn:hover { transform:translateY(-1px); box-shadow:0 4px 15px rgba(201,168,76,0.4); }
+
+  /* MOBILE: toggle sidebar */
+  .toggle-sidebar-btn {
+    display:none; background:var(--black4);
+    border:1px solid rgba(201,168,76,0.2);
+    color:var(--gold); width:40px; height:40px; border-radius:8px;
+    cursor:pointer; font-size:18px; align-items:center; justify-content:center;
+    transition:all 0.2s;
+  }
+
+  @media(max-width:768px){
+    .sidebar { position:fixed; right:0; top:60px; bottom:0; z-index:50; transform:translateX(100%); transition:transform 0.3s; }
+    .sidebar.open { transform:translateX(0); }
+    .toggle-sidebar-btn { display:flex; }
+    .player-section { flex-direction:column; }
+    .video-wrap { flex:none; height:55vw; min-height:200px; }
+    .url-frame-wrap { flex:none; height:55vw; min-height:200px; }
+    .volume-slider { width:60px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="logo-small">OSSAMA</div>
+    <div class="channel-info">
+      <div class="channel-info-name" id="topChannelName">اختر قناة للتشغيل</div>
+      <div class="channel-info-sub">
+        <span class="live-badge" id="liveBadge" style="display:none">LIVE</span>
+        <span id="topChannelType" style="color:var(--text-dim);font-size:11px;">مشغل HLS المتقدم</span>
+      </div>
+    </div>
+    <button class="toggle-sidebar-btn" onclick="toggleSidebar()">☰</button>
+    <button class="back-btn" onclick="goBack()">← OSSAMA TV</button>
+  </div>
+
+  <!-- PLAYER SECTION -->
+  <div class="player-section">
+    <!-- VIDEO -->
+    <div class="video-wrap" id="videoWrap" onclick="toggleControls()">
+      <video id="mainVideo" playsinline></video>
+
+      <!-- LOADING -->
+      <div class="loading-overlay" id="loadingOverlay" style="display:none">
+        <div class="spinner"></div>
+        <div class="loading-text">جاري التحميل...</div>
+        <div class="loading-sub" id="loadingUrl"></div>
+      </div>
+
+      <!-- ERROR -->
+      <div class="error-overlay" id="errorOverlay">
+        <div class="error-icon">📡</div>
+        <div class="error-title">تعذر تشغيل القناة</div>
+        <div class="error-msg" id="errorMsg">تأكد من رابط القناة وحاول مرة أخرى</div>
+        <button class="retry-btn" onclick="retryLoad()">🔄 إعادة المحاولة</button>
+      </div>
+
+      <!-- OVERLAY CONTROLS -->
+      <div class="video-overlay" id="videoOverlay">
+        <div class="overlay-top">
+          <div class="overlay-title" id="overlayTitle">—</div>
+          <div class="live-badge" id="overlayLive" style="display:none">LIVE</div>
+        </div>
+        <div class="overlay-bottom">
+          <div class="progress-bar" id="progressBar" onclick="seekVideo(event)">
+            <div class="progress-fill" id="progressFill"></div>
+            <div class="progress-dot" id="progressDot"></div>
+          </div>
+          <div class="controls-row">
+            <button class="ctrl-btn" onclick="seekBack(); event.stopPropagation()">⏮</button>
+            <button class="ctrl-btn primary" id="playPauseBtn" onclick="togglePlay(); event.stopPropagation()">▶</button>
+            <button class="ctrl-btn" onclick="seekForward(); event.stopPropagation()">⏭</button>
+            <div class="volume-wrap" onclick="event.stopPropagation()">
+              <button class="ctrl-btn" onclick="toggleMute()" style="font-size:16px">🔊</button>
+              <input type="range" class="volume-slider" id="volumeSlider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
+            </div>
+            <span class="time-display" id="timeDisplay">Live</span>
+            <button class="ctrl-btn fullscreen-btn" onclick="toggleFullscreen(); event.stopPropagation()" style="font-size:18px">⛶</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- WELCOME STATE -->
+      <div id="welcomeState" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:radial-gradient(ellipse at center, #0f0f05 0%, #050505 100%);">
+        <div style="font-family:'Cinzel',serif;font-size:36px;font-weight:900;background:linear-gradient(135deg,#f0d060,#c9a84c,#8b6914,#c9a84c);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 15px rgba(201,168,76,0.5));letter-spacing:4px;">OSSAMA</div>
+        <div style="font-family:'Cinzel',serif;font-size:14px;color:var(--gold-dark);letter-spacing:8px;">PLAYER</div>
+        <div style="width:60px;height:1px;background:linear-gradient(90deg,transparent,var(--gold),transparent);"></div>
+        <div style="color:var(--text-dim);font-size:14px;text-align:center;max-width:260px;line-height:1.8;">أدخل رابط القناة أدناه أو اختر من القائمة</div>
+      </div>
+    </div>
+
+    <!-- URL PLAYER (for non-HLS channels) -->
+    <div class="url-frame-wrap" id="urlFrameWrap">
+      <div class="url-info">
+        <h3 id="urlChannelName">قناة URL</h3>
+        <p>هذه القناة تعمل عبر المتصفح مباشرة. اضغط الزر أدناه للمشاهدة.</p>
+      </div>
+      <a class="url-open-btn" id="urlOpenLink" href="#" target="_blank">🌐 فتح القناة في المتصفح</a>
+    </div>
+
+    <!-- SIDEBAR -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span style="font-size:18px">📺</span>
+        <span class="sidebar-title">قنوات OSSAMA TV</span>
+        <span class="sidebar-count" id="sidebarCount">0</span>
+      </div>
+      <div class="sidebar-search">
+        <input type="text" placeholder="بحث في القنوات..." id="sidebarSearch" oninput="filterSidebar()">
+      </div>
+      <div class="sidebar-list" id="sidebarList">
+        <div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">
+          <div style="font-size:30px;margin-bottom:10px;opacity:0.3">📺</div>
+          لا توجد قنوات محفوظة بعد.<br>افتح OSSAMA TV لإضافة قنوات.
+        </div>
+      </div>
+      <!-- URL Input -->
+      <div class="url-input-panel">
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">🔗 تشغيل رابط مباشر:</div>
+        <div class="url-input-row">
+          <input type="text" class="url-input-field" id="directUrlInput" placeholder="أدخل رابط M3U8 أو URL...">
+          <button class="url-play-btn" onclick="playDirectUrl()">▶ تشغيل</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =========== INIT ===========
+const video = document.getElementById('mainVideo');
+let hls = null;
+let currentUrl = '';
+let currentName = '';
+let overlayTimeout = null;
+let allChannels = [];
+
+// Read URL params
+const params = new URLSearchParams(window.location.search);
+const paramUrl  = params.get('url')  || '';
+const paramName = params.get('name') || '';
+
+// Load channels from localStorage (shared with OSSAMA TV)
+function loadChannels() {
+  try {
+    const raw = localStorage.getItem('ossama_tv_data');
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    return data.channels || [];
+  } catch(e) { return []; }
+}
+
+function buildSidebar() {
+  allChannels = loadChannels();
+  const list = document.getElementById('sidebarList');
+  const count = document.getElementById('sidebarCount');
+  count.textContent = allChannels.length;
+  renderSidebarItems(allChannels);
+}
+
+function renderSidebarItems(channels) {
+  const list = document.getElementById('sidebarList');
+  if (channels.length === 0) {
+    list.innerHTML = `<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;"><div style="font-size:30px;margin-bottom:10px;opacity:0.3">📺</div>لا توجد قنوات.<br>افتح OSSAMA TV لإضافة قنوات.</div>`;
+    return;
+  }
+  list.innerHTML = channels.map(ch => {
+    const isM3u8 = ch.url && (ch.url.includes('.m3u8') || ch.url.includes('.m3u') || ch.url.toLowerCase().includes('hls'));
+    return `
+      <div class="sidebar-item ${ch.url === currentUrl ? 'active' : ''}" onclick="playSidebarChannel('${escUrl(ch.url)}','${escStr(ch.name)}')">
+        <div class="sidebar-item-img">
+          ${ch.img ? `<img src="${ch.img}" onerror="this.parentElement.innerHTML='📺'">` : '📺'}
+        </div>
+        <span class="sidebar-item-name">${escHtml(ch.name)}</span>
+        <span class="sidebar-item-badge ${isM3u8?'':'url'}">${isM3u8?'HLS':'URL'}</span>
+      </div>`;
+  }).join('');
+}
+
+function filterSidebar() {
+  const q = document.getElementById('sidebarSearch').value.trim().toLowerCase();
+  const filtered = q ? allChannels.filter(c => c.name.toLowerCase().includes(q)) : allChannels;
+  renderSidebarItems(filtered);
+}
+
+// =========== PLAY LOGIC ===========
+function playSidebarChannel(url, name) {
+  playChannel(decodeURIComponent(url), decodeURIComponent(name));
+  // Close sidebar on mobile
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+function playChannel(url, name) {
+  if (!url) return;
+  currentUrl = url;
+  currentName = name || url;
+
+  const isM3u8 = url.includes('.m3u8') || url.includes('.m3u') || url.toLowerCase().includes('hls') || url.toLowerCase().includes('stream');
+
+  // Update UI
+  document.getElementById('topChannelName').textContent = currentName;
+  document.getElementById('overlayTitle').textContent = currentName;
+  document.getElementById('welcomeState').style.display = 'none';
+  document.getElementById('errorOverlay').classList.remove('show');
+
+  if (isM3u8) {
+    // Show video, hide URL panel
+    document.getElementById('videoWrap').style.display = 'flex';
+    document.getElementById('urlFrameWrap').classList.remove('show');
+    document.getElementById('liveBadge').style.display = 'flex';
+    document.getElementById('overlayLive').style.display = 'flex';
+    document.getElementById('topChannelType').textContent = 'HLS · بث مباشر';
+    loadHLS(url);
+  } else {
+    // URL channel - show URL panel, hide video
+    document.getElementById('videoWrap').style.display = 'none';
+    document.getElementById('urlFrameWrap').classList.add('show');
+    document.getElementById('liveBadge').style.display = 'none';
+    document.getElementById('overlayLive').style.display = 'none';
+    document.getElementById('topChannelType').textContent = 'URL · مشاهدة عبر المتصفح';
+    document.getElementById('urlChannelName').textContent = currentName;
+    document.getElementById('urlOpenLink').href = url;
+  }
+
+  buildSidebar(); // refresh active state
+}
+
+function loadHLS(url) {
+  showLoading(true, url);
+
+  // Destroy old HLS
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.src = '';
+
+  if (Hls.isSupported()) {
+    hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: true,
+      backBufferLength: 90,
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      showLoading(false);
+      video.play().catch(() => {});
+      document.getElementById('playPauseBtn').textContent = '⏸';
+    });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        showLoading(false);
+        showError('خطأ في تحميل البث: ' + (data.type || 'خطأ غير معروف'));
+      }
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Native HLS (Safari/iOS)
+    video.src = url;
+    video.addEventListener('loadedmetadata', () => {
+      showLoading(false);
+      video.play().catch(() => {});
+      document.getElementById('playPauseBtn').textContent = '⏸';
+    }, { once: true });
+    video.addEventListener('error', () => {
+      showLoading(false);
+      showError('تعذر تحميل القناة على هذا المتصفح');
+    }, { once: true });
+  } else {
+    showLoading(false);
+    showError('المتصفح لا يدعم تشغيل HLS. جرب Chrome أو Firefox.');
+  }
+}
+
+function showLoading(show, url) {
+  const el = document.getElementById('loadingOverlay');
+  el.style.display = show ? 'flex' : 'none';
+  if (url) document.getElementById('loadingUrl').textContent = url.length > 50 ? url.slice(0,47)+'...' : url;
+}
+function showError(msg) {
+  document.getElementById('errorMsg').textContent = msg;
+  document.getElementById('errorOverlay').classList.add('show');
+}
+
+let retryUrl = '';
+function retryLoad() {
+  if (currentUrl) {
+    document.getElementById('errorOverlay').classList.remove('show');
+    loadHLS(currentUrl);
+  }
+}
+
+// =========== CONTROLS ===========
+function togglePlay() {
+  if (video.paused) {
+    video.play(); document.getElementById('playPauseBtn').textContent = '⏸';
+  } else {
+    video.pause(); document.getElementById('playPauseBtn').textContent = '▶';
+  }
+}
+function seekBack()    { video.currentTime = Math.max(0, video.currentTime - 10); }
+function seekForward() { video.currentTime = video.currentTime + 10; }
+function setVolume(v)  { video.volume = v; }
+function toggleMute()  { video.muted = !video.muted; }
+
+function seekVideo(e) {
+  if (!video.duration || !isFinite(video.duration)) return;
+  const bar = document.getElementById('progressBar');
+  const rect = bar.getBoundingClientRect();
+  const ratio = (e.clientX - rect.left) / rect.width;
+  video.currentTime = ratio * video.duration;
+}
+
+video.addEventListener('timeupdate', () => {
+  if (!video.duration || !isFinite(video.duration)) {
+    document.getElementById('timeDisplay').textContent = 'Live';
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressDot').style.right = '0%';
+    return;
+  }
+  const pct = (video.currentTime / video.duration) * 100;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressDot').style.right = (100 - pct) + '%';
+  document.getElementById('timeDisplay').textContent = fmtTime(video.currentTime) + ' / ' + fmtTime(video.duration);
+});
+
+function fmtTime(s) {
+  if (!isFinite(s)) return '--:--';
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return `${m}:${sec.toString().padStart(2,'0')}`;
+}
+
+function toggleFullscreen() {
+  const wrap = document.getElementById('videoWrap');
+  if (!document.fullscreenElement) {
+    (wrap.requestFullscreen || wrap.webkitRequestFullscreen || wrap.mozRequestFullScreen).call(wrap);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
+  }
+}
+
+function toggleControls() {
+  const overlay = document.getElementById('videoOverlay');
+  overlay.classList.toggle('show');
+  clearTimeout(overlayTimeout);
+  if (overlay.classList.contains('show')) {
+    overlayTimeout = setTimeout(() => overlay.classList.remove('show'), 4000);
+  }
+}
+
+// =========== DIRECT URL ===========
+function playDirectUrl() {
+  const url = document.getElementById('directUrlInput').value.trim();
+  if (!url) return;
+  playChannel(url, 'قناة مباشرة');
+}
+document.getElementById('directUrlInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') playDirectUrl();
+});
+
+// =========== SIDEBAR TOGGLE ===========
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// =========== BACK ===========
+function goBack() {
+  window.location.href = 'OSSAMA_TV.html';
+}
+
+// =========== UTILS ===========
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escStr(str) { return encodeURIComponent(str || ''); }
+function escUrl(str) { return encodeURIComponent(str || ''); }
+
+// =========== INIT ===========
+buildSidebar();
+
+// Listen for updates from OSSAMA TV
+try {
+  const bc = new BroadcastChannel('ossama_tv');
+  bc.onmessage = (e) => { if (e.data.type === 'data_updated') buildSidebar(); };
+} catch(e) {}
+
+// Auto-play if URL param provided
+if (paramUrl) {
+  setTimeout(() => playChannel(paramUrl, paramName), 300);
+}
+</script>
+</body>
+</html>
